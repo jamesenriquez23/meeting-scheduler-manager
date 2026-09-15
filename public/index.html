@@ -500,6 +500,15 @@
                   <div>
                     <div class="flex justify-between items-center mb-1">
                       <label class="block text-sm font-medium text-gray-700">Password</label>
+                      {authMode === 'login' && (
+                        <button 
+                          type="button" 
+                          onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage(''); }} 
+                          class="text-xs text-blue-600 hover:underline"
+                        >
+                          Forgot password?
+                        </button>
+                      )}
                     </div>
                     <PasswordInput 
                       required 
@@ -524,16 +533,6 @@
                   <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded font-semibold hover:bg-blue-700 transition">
                     {authMode === 'signup' ? 'Create Account' : 'Sign In'}
                   </button>
-
-                         {authMode === 'login' && (
-                        <button 
-                          type="button" 
-                          onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage(''); }} 
-                          class="text-xs text-blue-600 hover:underline"
-                        >
-                          Forgot password?
-                        </button>
-                      )}
                 </form>
               )}
 
