@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meeting Schedule Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // --- REUSABLE PASSWORD INPUT COMPONENT WITH EYE TOGGLE ---
+    function PasswordInput({ value, onChange, placeholder = "Enter password", required = false }) {
+      const [showPassword, setShowPassword] = useState(false);
+
+      return (
+        <div class="relative">
+          <input 
+            type={showPassword ? "text" : "password"} 
+            required={required} 
+            value={value} 
+            onChange={onChange}
+            class="w-full border rounded px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+            placeholder={placeholder}
+          />
+          <button 
+            type="button" 
+            onClick={() => setShowPassword(!showPassword)}
+            class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
+            title={showPassword ? "Hide password" : "Show password"}
+          >
+            {showPassword ? (
+              // Eye Off Icon
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22" />
+              </svg>
+            ) : (
+              // Eye Icon
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      );
+    }
+
+    function App() {
+      const [user, setUser] = useState(null);
+      const [isAuthChecking, setIsAuthChecking] = useState(true);
+      
+      // Auth views: 'login' | 'signup' | 'forgot' | 'reset'
+      const [authMode, setAuthMode] = useState('login');
+      const [authCreds, setAuthCreds] = useState({ username: '', email: '', password: '', confirmPassword: '' });
+      const [resetState, setResetState] = useState({ email: '', token: '', newPassword: '', confirmNewPassword: '' });
+      const [simulatedTokenNotice, setSimulatedTokenNotice] = useState('');
+      const [authError, setAuthError] = useState('');
+      const [authMessage, setAuthMessage] = useState('');
+
+      const [activeTab, setActiveTab] = useState('roster');
+      const [brothers, setBrothers] = useState([]);
+      const [awayList, setAwayList] = useState([]);
+      const [eventsList, setEventsList] = useState([]);
+      const [schedule, setSchedule] = useState([]);
+      
+      // Profile Tab Form States
+      const [profileEmail, setProfileEmail] = useState('');
+      const [passData, setPassData] = useState({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+      const [profileMsg, setProfileMsg] = useState('');
+      const [profileErr, setProfileErr] = useState('');
+
+      // Admin Panel States
+      const [adminUsers, setAdminUsers] = useState([]);
+      const [adminError, setAdminError] = useState('');
+
+      const [newBrother, setNewBrother] = useState({ name: '', can_wt_reader: false, can_chairman: false, can_attendants: false, can_microvers: false, can_av: false });
+      const [newAway, setNewAway] = useState({ brother_id: '', away_date: '' });
+      const [newEvent, setNewEvent] = useState({ event_date: '', description: '' });
+
+      const [genMonth, setGenMonth] = useState(9);
+      const [genYear, setGenYear] = useState(2026);
+      const [editingRow, setEditingRow] = useState(null);
+      const [errorMessage, setErrorMessage] = useState('');
+      const [successModal, setSuccessModal] = useState('');
+      const [isGenerating, setIsGenerating] = useState(false);
+
+      const authFetch = (url, options = {}) => {
+        const token = localStorage.getItem('token');
+        const headers = {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          ...options.headers,
+        };
+        return fetch(url, { ...options, headers }).then(r => {
+          if (r.status === 401) {
+            localStorage.removeItem('token');
+            setUser(null);
+          }
+          return r;
+        });
+      };
+
+      useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          authFetch('/api/me')
+            .then(r => r.json())
+            .then(data => {
+              if (data.user) {
+                setUser(data.user);
+                setProfileEmail(data.user.email || '');
+                loadInitialData();
+              }
+            })
+            .finally(() => setIsAuthChecking(false));
+        } else {
+          setIsAuthChecking(false);
+        }
+      }, []);
+
+      const loadInitialData = () => {
+        fetchBrothers();
+        fetchAway();
+        fetchEvents();
+        fetchSchedule(genMonth, genYear);
+      };
+
+      const fetchAdminUsers = () => {
+        setAdminError('');
+        authFetch('/api/admin/users')
+          .then(async r => {
+            const res = await r.json();
+            if (!r.ok) throw new Error(res.error || 'Failed to fetch users');
+            setAdminUsers(res.users);
+          })
+          .catch(err => setAdminError(err.message));
+      };
+
+      const handleAuthSubmit = (e) => {
+        e.preventDefault();
+        setAuthError('');
+        setAuthMessage('');
+
+        if (authMode === 'signup' && authCreds.password !== authCreds.confirmPassword) {
+          setAuthError('Passwords do not match!');
+          return;
+        }
+
+        const endpoint = authMode === 'signup' ? '/api/register' : '/api/login';
+        
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: authCreds.username,
+            email: authCreds.email,
+            password: authCreds.password
+          })
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error || 'Authentication failed.');
+          localStorage.setItem('token', res.token);
+          setUser(res.user);
+          setProfileEmail(res.user.email || '');
+          loadInitialData();
+        })
+        .catch(err => setAuthError(err.message));
+      };
+
+      const handleRequestResetToken = (e) => {
+        e.preventDefault();
+        setAuthError('');
+        setAuthMessage('');
+        setSimulatedTokenNotice('');
+
+        fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: resetState.email })
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error || 'Request failed.');
+          setAuthMessage('Reset code generated!');
+          if (res.simulatedResetToken) {
+            setSimulatedTokenNotice(`Simulated Email Code: ${res.simulatedResetToken}`);
+            setResetState(prev => ({ ...prev, token: res.simulatedResetToken }));
+          }
+          setAuthMode('reset');
+        })
+        .catch(err => setAuthError(err.message));
+      };
+
+      const handleResetPassword = (e) => {
+        e.preventDefault();
+        setAuthError('');
+        setAuthMessage('');
+
+        if (resetState.newPassword !== resetState.confirmNewPassword) {
+          setAuthError('New passwords do not match.');
+          return;
+        }
+
+        fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: resetState.email,
+            token: resetState.token,
+            newPassword: resetState.newPassword
+          })
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error || 'Reset failed.');
+          setAuthMessage('Password reset successfully! Please log in.');
+          setAuthMode('login');
+          setResetState({ email: '', token: '', newPassword: '', confirmNewPassword: '' });
+          setSimulatedTokenNotice('');
+        })
+        .catch(err => setAuthError(err.message));
+      };
+
+      const handleUpdateProfileEmail = (e) => {
+        e.preventDefault();
+        setProfileErr('');
+        setProfileMsg('');
+
+        authFetch('/api/user/profile', {
+          method: 'PUT',
+          body: JSON.stringify({ email: profileEmail })
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error);
+          setUser(prev => ({ ...prev, email: res.email }));
+          setProfileMsg('Profile email updated successfully!');
+        })
+        .catch(err => setProfileErr(err.message));
+      };
+
+      const handleChangePassword = (e) => {
+        e.preventDefault();
+        setProfileErr('');
+        setProfileMsg('');
+
+        if (passData.newPassword !== passData.confirmNewPassword) {
+          setProfileErr('New passwords do not match.');
+          return;
+        }
+
+        authFetch('/api/user/change-password', {
+          method: 'PUT',
+          body: JSON.stringify({
+            currentPassword: passData.currentPassword,
+            newPassword: passData.newPassword
+          })
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error);
+          setProfileMsg('Password changed successfully!');
+          setPassData({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+        })
+        .catch(err => setProfileErr(err.message));
+      };
+
+      const handleLogout = () => {
+        authFetch('/api/logout', { method: 'POST' }).finally(() => {
+          localStorage.removeItem('token');
+          setUser(null);
+          setAuthCreds({ username: '', email: '', password: '', confirmPassword: '' });
+          setAuthMode('login');
+        });
+      };
+
+      const fetchBrothers = () => authFetch('/api/brothers').then(r => r.json()).then(setBrothers);
+      const fetchAway = () => authFetch('/api/away').then(r => r.json()).then(setAwayList);
+      const fetchEvents = () => authFetch('/api/events').then(r => r.json()).then(setEventsList);
+      
+      const fetchSchedule = (m = genMonth, y = genYear) => {
+        authFetch(`/api/schedule?year=${y}&month=${m}`)
+          .then(r => r.json())
+          .then(setSchedule);
+      };
+
+      const handlePrevMonth = () => {
+        let m = Number(genMonth) - 1;
+        let y = Number(genYear);
+        if (m < 1) { m = 12; y -= 1; }
+        setGenMonth(m);
+        setGenYear(y);
+        fetchSchedule(m, y);
+      };
+
+      const handleNextMonth = () => {
+        let m = Number(genMonth) + 1;
+        let y = Number(genYear);
+        if (m > 12) { m = 1; y += 1; }
+        setGenMonth(m);
+        setGenYear(y);
+        fetchSchedule(m, y);
+      };
+
+      const resetAllSchedules = () => {
+        if (window.confirm("Are you sure you want to reset and delete ALL your generated schedules? This cannot be undone.")) {
+          authFetch('/api/schedule/reset/all', { method: 'DELETE' })
+            .then(r => r.json())
+            .then(() => {
+              fetchSchedule(genMonth, genYear);
+              setSuccessModal('All generated schedules have been reset successfully!');
+            })
+            .catch(err => setErrorMessage('Failed to reset schedules.'));
+        }
+      };
+
+      const addBrother = (e) => {
+        e.preventDefault();
+        setErrorMessage('');
+        authFetch('/api/brothers', {
+          method: 'POST',
+          body: JSON.stringify(newBrother)
+        })
+        .then(async r => {
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error);
+          fetchBrothers();
+          setNewBrother({ name: '', can_wt_reader: false, can_chairman: false, can_attendants: false, can_microvers: false, can_av: false });
+          setSuccessModal('Brother added successfully!');
+        })
+        .catch(err => setErrorMessage(err.message));
+      };
+
+      const addAway = (e) => {
+        e.preventDefault();
+        if (!newAway.brother_id || !newAway.away_date) return;
+        authFetch('/api/away', {
+          method: 'POST',
+          body: JSON.stringify(newAway)
+        }).then(() => { 
+          fetchAway(); 
+          setNewAway({ brother_id: '', away_date: '' }); 
+          setSuccessModal('Away date added successfully!');
+        });
+      };
+
+      const addEvent = (e) => {
+        e.preventDefault();
+        if (!newEvent.event_date || !newEvent.description) return;
+        authFetch('/api/events', {
+          method: 'POST',
+          body: JSON.stringify(newEvent)
+        }).then(() => { 
+          fetchEvents(); 
+          setNewEvent({ event_date: '', description: '' }); 
+          setSuccessModal('Special event added successfully!');
+        });
+      };
+
+      const togglePrivilege = (brother, field) => {
+        const updated = { ...brother, [field]: !brother[field] };
+        authFetch(`/api/brothers/${brother.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(updated)
+        }).then(fetchBrothers);
+      };
+
+      const generateSchedule = () => {
+        setErrorMessage('');
+        setIsGenerating(true);
+
+        authFetch('/api/schedule/generate', {
+          method: 'POST',
+          body: JSON.stringify({ year: Number(genYear), month: Number(genMonth) })
+        })
+        .then(async (response) => {
+          const contentType = response.headers.get('content-type');
+          if (!response.ok) {
+            if (contentType && contentType.includes('application/json')) {
+              const errData = await response.json();
+              throw new Error(errData.error || 'Generation failed.');
+            } else {
+              throw new Error(`Server returned status ${response.status}.`);
+            }
+          }
+          return response.json();
+        })
+        .then((data) => {
+          setSchedule(data.schedule);
+          setSuccessModal('Monthly schedule generated successfully!');
+        })
+        .catch((err) => setErrorMessage(err.message))
+        .finally(() => setIsGenerating(false));
+      };
+
+      const saveScheduleEdit = (id) => {
+        authFetch(`/api/schedule/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(editingRow)
+        }).then(() => {
+          setEditingRow(null);
+          fetchSchedule(genMonth, genYear);
+          setSuccessModal('Schedule entry updated successfully!');
+        });
+      };
+
+      const deleteScheduleRow = (id) => {
+        authFetch(`/api/schedule/${id}`, { method: 'DELETE' }).then(() => fetchSchedule(genMonth, genYear));
+      };
+
+      const groupScheduleByMonth = (items) => {
+        const groups = {};
+        items.forEach(item => {
+          const parts = item.schedule_date.split('.');
+          if (parts.length === 3) {
+            const monthYear = `${parts[1]}.${parts[2]}`;
+            if (!groups[monthYear]) groups[monthYear] = [];
+            groups[monthYear].push(item);
+          }
+        });
+        return groups;
+      };
+
+      if (isAuthChecking) {
+        return (
+          <div class="min-h-screen flex items-center justify-center bg-gray-100">
+            <div class="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent"></div>
+          </div>
+        );
+      }
+
+      // --- AUTHENTICATION SCREENS ---
+      if (!user) {
+        return (
+          <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
+            <div class="max-w-md w-full bg-white rounded-lg shadow-md p-8">
+              <h2 class="text-2xl font-bold text-center text-blue-900 mb-2">Meeting Schedule Manager</h2>
+              <p class="text-sm text-center text-gray-500 mb-6">
+                {authMode === 'signup' && 'Create an account to manage your schedule'}
+                {authMode === 'login' && 'Sign in to access your scheduler'}
+                {authMode === 'forgot' && 'Reset your password via Email'}
+                {authMode === 'reset' && 'Enter reset code and new password'}
+              </p>
+              
+              {authError && (
+                <div class="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm font-semibold">
+                  {authError}
+                </div>
+              )}
+
+              {authMessage && (
+                <div class="bg-green-100 text-green-700 p-3 rounded mb-4 text-sm font-semibold">
+                  {authMessage}
+                </div>
+              )}
+
+              {simulatedTokenNotice && (
+                <div class="bg-yellow-100 border border-yellow-300 text-yellow-800 p-3 rounded mb-4 text-xs font-mono">
+                  {simulatedTokenNotice}
+                </div>
+              )}
+
+              {/* LOGIN / SIGNUP FORMS */}
+              {(authMode === 'login' || authMode === 'signup') && (
+                <form onSubmit={handleAuthSubmit} class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Username or Email</label>
+                    <input 
+                      type="text" 
+                      required 
+                      value={authCreds.username} 
+                      onChange={e => setAuthCreds({...authCreds, username: e.target.value})}
+                      class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                      placeholder="Enter username or email"
+                    />
+                  </div>
+
+                  {authMode === 'signup' && (
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                      <input 
+                        type="email" 
+                        required 
+                        value={authCreds.email} 
+                        onChange={e => setAuthCreds({...authCreds, email: e.target.value})}
+                        class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                        placeholder="you@example.com"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <div class="flex justify-between items-center mb-1">
+                      <label class="block text-sm font-medium text-gray-700">Password</label>
+                    </div>
+                    <PasswordInput 
+                      required 
+                      value={authCreds.password} 
+                      onChange={e => setAuthCreds({...authCreds, password: e.target.value})}
+                      placeholder="Enter password"
+                    />
+                  </div>
+
+                  {authMode === 'signup' && (
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+                      <PasswordInput 
+                        required 
+                        value={authCreds.confirmPassword} 
+                        onChange={e => setAuthCreds({...authCreds, confirmPassword: e.target.value})}
+                        placeholder="Confirm password"
+                      />
+                    </div>
+                  )}
+
+                  <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded font-semibold hover:bg-blue-700 transition">
+                    {authMode === 'signup' ? 'Create Account' : 'Sign In'}
+                  </button>
+
+                         {authMode === 'login' && (
+                        <button 
+                          type="button" 
+                          onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage(''); }} 
+                          class="text-xs text-blue-600 hover:underline"
+                        >
+                          Forgot password?
+                        </button>
+                      )}
+                </form>
+              )}
+
+              {/* FORGOT PASSWORD FORM */}
+              {authMode === 'forgot' && (
+                <form onSubmit={handleRequestResetToken} class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Registered Email Address</label>
+                    <input 
+                      type="email" 
+                      required 
+                      value={resetState.email} 
+                      onChange={e => setResetState({...resetState, email: e.target.value})}
+                      class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                      placeholder="Enter your account email"
+                    />
+                  </div>
+
+                  <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded font-semibold hover:bg-blue-700 transition">
+                    Send Reset Link
+                  </button>
+                </form>
+              )}
+
+              {/* RESET PASSWORD FORM */}
+              {authMode === 'reset' && (
+                <form onSubmit={handleResetPassword} class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Reset Code / Token</label>
+                    <input 
+                      type="text" 
+                      required 
+                      value={resetState.token} 
+                      onChange={e => setResetState({...resetState, token: e.target.value})}
+                      class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                      placeholder="Enter reset code"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                    <PasswordInput 
+                      required 
+                      value={resetState.newPassword} 
+                      onChange={e => setResetState({...resetState, newPassword: e.target.value})}
+                      placeholder="Enter new password"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+                    <PasswordInput 
+                      required 
+                      value={resetState.confirmNewPassword} 
+                      onChange={e => setResetState({...resetState, confirmNewPassword: e.target.value})}
+                      placeholder="Confirm new password"
+                    />
+                  </div>
+
+                  <button type="submit" class="w-full bg-green-600 text-white py-2 rounded font-semibold hover:bg-green-700 transition">
+                    Update Password
+                  </button>
+                </form>
+              )}
+
+              <div class="mt-6 text-center border-t pt-4 space-y-2">
+                {authMode === 'signup' && (
+                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }} class="text-sm text-blue-600 hover:underline font-medium">
+                    Already have an account? Sign In
+                  </button>
+                )}
+                {authMode === 'login' && (
+                  <button onClick={() => { setAuthMode('signup'); setAuthError(''); setAuthMessage(''); }} class="text-sm text-blue-600 hover:underline font-medium">
+                    Need an account? Create one here
+                  </button>
+                )}
+                {(authMode === 'forgot' || authMode === 'reset') && (
+                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }} class="text-sm text-blue-600 hover:underline font-medium">
+                    ← Back to Sign In
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      const groupedSchedule = groupScheduleByMonth(schedule);
+      const targetKey = `${String(genMonth).padStart(2, '0')}.${genYear}`;
+
+      return (
+        <div class="max-w-6xl mx-auto p-6">
+          {/* LOADING OVERLAY */}
+          {isGenerating && (
+            <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div class="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl text-center">
+                <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
+                <h3 class="text-lg font-bold text-gray-800">Generating Schedule...</h3>
+                <p class="text-sm text-gray-500 mt-1">Checking qualifications and availability.</p>
+              </div>
+            </div>
+          )}
+
+          {/* SUCCESS MODAL OVERLAY */}
+          {successModal && !isGenerating && (
+            <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div class="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl text-center">
+                <div class="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
+                  ✓
+                </div>
+                <h3 class="text-xl font-bold text-gray-800 mb-2">Success!</h3>
+                <p class="text-gray-600 mb-6">{successModal}</p>
+                <button 
+                  onClick={() => setSuccessModal('')} 
+                  class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 rounded-lg w-full transition"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          )}
+
+          <header class="flex justify-between items-center mb-6 pb-4 border-b">
+            <div>
+              <h1 class="text-2xl font-bold text-blue-900">Meeting Schedule Manager</h1>
+              <p class="text-xs text-gray-500">Logged in as: <strong class="text-gray-700">{user.username}</strong> ({user.email || 'No email set'})</p>
+            </div>
+            <div class="flex items-center gap-4">
+              <nav class="flex gap-2 items-center flex-wrap">
+                <button onClick={() => setActiveTab('roster')} class={`px-4 py-2 rounded ${activeTab === 'roster' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Roster</button>
+                <button onClick={() => setActiveTab('away_events')} class={`px-4 py-2 rounded ${activeTab === 'away_events' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Away & Events</button>
+                <button onClick={() => { setActiveTab('schedule'); fetchSchedule(genMonth, genYear); }} class={`px-4 py-2 rounded ${activeTab === 'schedule' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Generator</button>
+                <button onClick={() => { setActiveTab('profile'); setProfileErr(''); setProfileMsg(''); }} class={`px-4 py-2 rounded ${activeTab === 'profile' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Profile</button>
+                
+                {user.username.toLowerCase() === 'admin' && (
+                  <button onClick={() => { setActiveTab('admin'); fetchAdminUsers(); }} class={`px-4 py-2 rounded font-bold ${activeTab === 'admin' ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-700'}`}>
+                    🛡️ Admin Panel
+                  </button>
+                )}
+              </nav>
+              <button onClick={handleLogout} class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-2 rounded text-sm transition">
+                Logout
+              </button>
+            </div>
+          </header>
+
+          {errorMessage && (
+            <div class="bg-red-100 text-red-700 p-3 rounded mb-4 font-semibold">
+              {errorMessage}
+            </div>
+          )}
+
+          {/* TAB 1: ROSTER */}
+          {activeTab === 'roster' && (
+            <div>
+              {brothers.length === 0 && (
+                <div class="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded mb-6">
+                  <h3 class="font-bold text-base mb-1">Welcome to your new Scheduler Account! 👋</h3>
+                  <p class="text-sm">Get started by adding brothers to your roster below and selecting their assigned privileges.</p>
+                </div>
+              )}
+
+              <form onSubmit={addBrother} class="bg-white p-4 rounded shadow mb-6 flex flex-wrap gap-4 items-center">
+                <input type="text" placeholder="Brother Name" value={newBrother.name} onChange={e => setNewBrother({...newBrother, name: e.target.value})} class="border p-2 rounded flex-1" required />
+                <label class="flex items-center gap-1"><input type="checkbox" checked={newBrother.can_wt_reader} onChange={e => setNewBrother({...newBrother, can_wt_reader: e.target.checked})} /> WT Reader</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked={newBrother.can_chairman} onChange={e => setNewBrother({...newBrother, can_chairman: e.target.checked})} /> Chairman</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked={newBrother.can_attendants} onChange={e => setNewBrother({...newBrother, can_attendants: e.target.checked})} /> Attendants</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked={newBrother.can_microvers} onChange={e => setNewBrother({...newBrother, can_microvers: e.target.checked})} /> MicRovers</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked={newBrother.can_av} onChange={e => setNewBrother({...newBrother, can_av: e.target.checked})} /> AV</label>
+                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded">Add Brother</button>
+              </form>
+
+              <div class="bg-white rounded shadow overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                  <thead>
+                    <tr class="bg-gray-100 border-b">
+                      <th class="p-3">Name</th>
+                      <th class="p-3 text-center">WT Reader</th>
+                      <th class="p-3 text-center">Chairman</th>
+                      <th class="p-3 text-center">Attendants</th>
+                      <th class="p-3 text-center">MicRovers</th>
+                      <th class="p-3 text-center">AV</th>
+                      <th class="p-3 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {brothers.map(b => (
+                      <tr key={b.id} class="border-b hover:bg-gray-50">
+                        <td class="p-3 font-semibold">{b.name}</td>
+                        <td class="p-3 text-center"><input type="checkbox" checked={!!b.can_wt_reader} onChange={() => togglePrivilege(b, 'can_wt_reader')} /></td>
+                        <td class="p-3 text-center"><input type="checkbox" checked={!!b.can_chairman} onChange={() => togglePrivilege(b, 'can_chairman')} /></td>
+                        <td class="p-3 text-center"><input type="checkbox" checked={!!b.can_attendants} onChange={() => togglePrivilege(b, 'can_attendants')} /></td>
+                        <td class="p-3 text-center"><input type="checkbox" checked={!!b.can_microvers} onChange={() => togglePrivilege(b, 'can_microvers')} /></td>
+                        <td class="p-3 text-center"><input type="checkbox" checked={!!b.can_av} onChange={() => togglePrivilege(b, 'can_av')} /></td>
+                        <td class="p-3 text-center"><button onClick={() => authFetch(`/api/brothers/${b.id}`, {method: 'DELETE'}).then(fetchBrothers)} class="text-red-600 hover:underline">Remove</button></td>
+                      </tr>
+                    ))}
+                    {brothers.length === 0 && (
+                      <tr>
+                        <td colSpan="7" class="p-6 text-center text-gray-500">No brothers in roster yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: AWAY & EVENTS */}
+          {activeTab === 'away_events' && (
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="bg-white p-4 rounded shadow">
+                <h2 class="text-lg font-bold mb-4">Manage Away Dates</h2>
+                <form onSubmit={addAway} class="flex gap-2 mb-4">
+                  <select value={newAway.brother_id} onChange={e => setNewAway({...newAway, brother_id: e.target.value})} class="border p-2 rounded flex-1">
+                    <option value="">Select Brother</option>
+                    {brothers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <input type="date" value={newAway.away_date} onChange={e => setNewAway({...newAway, away_date: e.target.value})} class="border p-2 rounded" />
+                  <button type="submit" class="bg-blue-600 text-white px-3 py-2 rounded">Add</button>
+                </form>
+                <ul>
+                  {awayList.map(a => (
+                    <li key={a.id} class="flex justify-between py-2 border-b">
+                      <span>{a.brother_name} - <strong class="text-blue-800">{a.away_date}</strong></span>
+                      <button onClick={() => authFetch(`/api/away/${a.id}`, {method: 'DELETE'}).then(fetchAway)} class="text-red-600">Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div class="bg-white p-4 rounded shadow">
+                <h2 class="text-lg font-bold mb-4">Manage Special Events</h2>
+                <form onSubmit={addEvent} class="flex gap-2 mb-4">
+                  <input type="date" value={newEvent.event_date} onChange={e => setNewEvent({...newEvent, event_date: e.target.value})} class="border p-2 rounded" />
+                  <input type="text" placeholder="Event Description" value={newEvent.description} onChange={e => setNewEvent({...newEvent, description: e.target.value})} class="border p-2 rounded flex-1" />
+                  <button type="submit" class="bg-blue-600 text-white px-3 py-2 rounded">Add</button>
+                </form>
+                <ul>
+                  {eventsList.map(ev => (
+                    <li key={ev.id} class="flex justify-between py-2 border-b">
+                      <span><strong class="text-blue-800">{ev.event_date}</strong>: {ev.description}</span>
+                      <button onClick={() => authFetch(`/api/events/${ev.id}`, {method: 'DELETE'}).then(fetchEvents)} class="text-red-600">Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: SCHEDULE GENERATOR */}
+          {activeTab === 'schedule' && (
+            <div>
+              <div class="bg-white p-4 rounded shadow mb-6 flex flex-wrap gap-4 items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <button onClick={handlePrevMonth} class="bg-gray-200 hover:bg-gray-300 px-3 py-2 rounded font-bold transition">
+                    ← Prev
+                  </button>
+                  <select value={genMonth} onChange={e => { const m = Number(e.target.value); setGenMonth(m); fetchSchedule(m, genYear); }} class="border p-2 rounded">
+                    {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>Month {i+1}</option>)}
+                  </select>
+                  <input type="number" value={genYear} onChange={e => { const y = Number(e.target.value); setGenYear(y); fetchSchedule(genMonth, y); }} class="border p-2 rounded w-24" />
+                  <button onClick={handleNextMonth} class="bg-gray-200 hover:bg-gray-300 px-3 py-2 rounded font-bold transition">
+                    Next →
+                  </button>
+                </div>
+
+                <div class="flex gap-2">
+                  <button onClick={() => fetchSchedule(genMonth, genYear)} class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded">Load Schedule</button>
+                  <button 
+                    onClick={generateSchedule} 
+                    disabled={isGenerating} 
+                    class={`bg-blue-600 text-white px-4 py-2 rounded transition flex items-center gap-2 ${isGenerating ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
+                  >
+                    {isGenerating ? (
+                      <>
+                        <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                        Generating...
+                      </>
+                    ) : (
+                      'Generate Schedule'
+                    )}
+                  </button>
+                  <button onClick={resetAllSchedules} class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">Reset All</button>
+                </div>
+              </div>
+
+              {Object.keys(groupedSchedule).length > 0 ? (
+                <div class="space-y-8">
+                  {Object.keys(groupedSchedule).map((monthKey) => {
+                    const isTargetMonth = monthKey === targetKey;
+                    return (
+                      <div key={monthKey} class={`bg-white rounded shadow overflow-hidden ${isTargetMonth ? 'ring-2 ring-blue-500' : 'opacity-90'}`}>
+                        <div class={`p-3 font-bold flex justify-between items-center ${isTargetMonth ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                          <span>Month: {monthKey}</span>
+                          {isTargetMonth ? (
+                            <span class="text-xs bg-white text-blue-800 px-2 py-1 rounded uppercase font-extrabold">Active / Selected Month</span>
+                          ) : (
+                            <span class="text-xs bg-gray-300 text-gray-700 px-2 py-1 rounded uppercase">Previous Context Month</span>
+                          )}
+                        </div>
+
+                        <table class="w-full text-left border-collapse">
+                          <thead>
+                            <tr class="bg-gray-50 border-b text-xs uppercase text-gray-500">
+                              <th class="p-3">Date (DD.MM.YYYY)</th>
+                              <th class="p-3">WT Reader</th>
+                              <th class="p-3">Chairman</th>
+                              <th class="p-3">Attendants</th>
+                              <th class="p-3">MicRovers</th>
+                              <th class="p-3">AV</th>
+                              <th class="p-3 text-center">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {groupedSchedule[monthKey].map((s) => (
+                              <tr key={s.id} class="border-b hover:bg-gray-50">
+                                <td class="p-3 font-semibold text-blue-900">{s.schedule_date}</td>
+                                {editingRow && editingRow.id === s.id ? (
+                                  <>
+                                    <td class="p-2"><input type="text" value={editingRow.wt_reader} onChange={e => setEditingRow({...editingRow, wt_reader: e.target.value})} class="border w-full p-1 rounded" /></td>
+                                    <td class="p-2"><input type="text" value={editingRow.chairman} onChange={e => setEditingRow({...editingRow, chairman: e.target.value})} class="border w-full p-1 rounded" /></td>
+                                    <td class="p-2"><input type="text" value={editingRow.attendants} onChange={e => setEditingRow({...editingRow, attendants: e.target.value})} class="border w-full p-1 rounded" /></td>
+                                    <td class="p-2"><input type="text" value={editingRow.microvers} onChange={e => setEditingRow({...editingRow, microvers: e.target.value})} class="border w-full p-1 rounded" /></td>
+                                    <td class="p-2"><input type="text" value={editingRow.av} onChange={e => setEditingRow({...editingRow, av: e.target.value})} class="border w-full p-1 rounded" /></td>
+                                    <td class="p-2 text-center">
+                                      <button onClick={() => saveScheduleEdit(s.id)} class="text-green-600 font-bold mr-2">Save</button>
+                                      <button onClick={() => setEditingRow(null)} class="text-gray-600">Cancel</button>
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td class="p-3">{s.wt_reader}</td>
+                                    <td class="p-3">{s.chairman}</td>
+                                    <td class="p-3">{s.attendants}</td>
+                                    <td class="p-3">{s.microvers}</td>
+                                    <td class="p-3">{s.av}</td>
+                                    <td class="p-3 text-center flex gap-2 justify-center">
+                                      <button onClick={() => setEditingRow(s)} class="text-blue-600 hover:underline">Edit</button>
+                                      <button onClick={() => deleteScheduleRow(s.id)} class="text-red-600 hover:underline">Delete</button>
+                                    </td>
+                                  </>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div class="bg-white p-6 rounded text-center text-gray-500 shadow">
+                  No schedule entries found for this month or the previous 2 months.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: USER PROFILE & SETTINGS */}
+          {activeTab === 'profile' && (
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {profileMsg && (
+                <div class="col-span-1 md:col-span-2 bg-green-100 text-green-700 p-3 rounded font-semibold">
+                  {profileMsg}
+                </div>
+              )}
+              {profileErr && (
+                <div class="col-span-1 md:col-span-2 bg-red-100 text-red-700 p-3 rounded font-semibold">
+                  {profileErr}
+                </div>
+              )}
+
+              {/* PROFILE INFO & EMAIL UPDATE */}
+              <div class="bg-white p-6 rounded shadow">
+                <h2 class="text-lg font-bold mb-4 border-b pb-2">Profile Information</h2>
+                <div class="mb-4">
+                  <label class="block text-xs font-semibold uppercase text-gray-500 mb-1">Username</label>
+                  <p class="text-gray-800 font-bold text-lg">{user.username}</p>
+                </div>
+
+                <form onSubmit={handleUpdateProfileEmail} class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                    <input 
+                      type="email" 
+                      required 
+                      value={profileEmail} 
+                      onChange={e => setProfileEmail(e.target.value)}
+                      class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                      placeholder="Enter your email address"
+                    />
+                  </div>
+                  <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-700 transition">
+                    Update Email
+                  </button>
+                </form>
+              </div>
+
+              {/* CHANGE PASSWORD */}
+              <div class="bg-white p-6 rounded shadow">
+                <h2 class="text-lg font-bold mb-4 border-b pb-2">Update Password</h2>
+                <form onSubmit={handleChangePassword} class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                    <PasswordInput 
+                      required 
+                      value={passData.currentPassword} 
+                      onChange={e => setPassData({...passData, currentPassword: e.target.value})}
+                      placeholder="Enter current password"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                    <PasswordInput 
+                      required 
+                      value={passData.newPassword} 
+                      onChange={e => setPassData({...passData, newPassword: e.target.value})}
+                      placeholder="Enter new password"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+                    <PasswordInput 
+                      required 
+                      value={passData.confirmNewPassword} 
+                      onChange={e => setPassData({...passData, confirmNewPassword: e.target.value})}
+                      placeholder="Confirm new password"
+                    />
+                  </div>
+
+                  <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded font-semibold hover:bg-green-700 transition">
+                    Change Password
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: ADMIN PANEL */}
+          {activeTab === 'admin' && user.username.toLowerCase() === 'admin' && (
+            <div class="bg-white p-6 rounded shadow">
+              <div class="flex justify-between items-center mb-6 pb-3 border-b">
+                <div>
+                  <h2 class="text-xl font-bold text-purple-900">Admin Control Panel</h2>
+                  <p class="text-xs text-gray-500">Manage registered user accounts</p>
+                </div>
+                <button onClick={fetchAdminUsers} class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm transition">
+                  Refresh List
+                </button>
+              </div>
+
+              {adminError && (
+                <div class="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm font-semibold">
+                  {adminError}
+                </div>
+              )}
+
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                  <thead>
+                    <tr class="bg-gray-100 border-b text-xs uppercase text-gray-500">
+                      <th class="p-3">ID</th>
+                      <th class="p-3">Username</th>
+                      <th class="p-3">Email Address</th>
+                      <th class="p-3 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminUsers.map(u => (
+                      <tr key={u.id} class="border-b hover:bg-gray-50">
+                        <td class="p-3 text-gray-600">#{u.id}</td>
+                        <td class="p-3 font-semibold text-gray-800">{u.username}</td>
+                        <td class="p-3 text-gray-600">{u.email || 'No email'}</td>
+                        <td class="p-3 text-center">
+                          {u.username.toLowerCase() !== 'admin' ? (
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Are you sure you want to delete user "${u.username}"?`)) {
+                                  authFetch(`/api/users/${u.id}`, { method: 'DELETE' })
+                                    .then(() => fetchAdminUsers());
+                                }
+                              }} 
+                              class="text-red-600 hover:underline text-sm font-medium"
+                            >
+                              Delete User
+                            </button>
+                          ) : (
+                            <span class="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded font-semibold">Protected</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {adminUsers.length === 0 && (
+                      <tr>
+                        <td colSpan="4" class="p-6 text-center text-gray-500">No other users found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
