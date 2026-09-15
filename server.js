@@ -482,10 +482,22 @@ const padMonth = String(month).padStart(2, '0');
 
             dates.forEach((dateStr) => {
               const awayBrotherIds = (awayRows || [])
-                .filter(a => a && a.away_date === dateStr)
+                .filter(a => {
+                  if (!a || !a.away_date) return false;
+                  
+                  // Convert database format "YYYY-MM-DD" (e.g., 2026-09-20) 
+                  // into "DD.MM.YYYY" (e.g., 20.09.2026) for an exact match
+                  const parts = String(a.away_date).trim().split('-');
+                  if (parts.length === 3) {
+                    const formattedAwayDate = `${parts[2]}.${parts[1]}.${parts[0]}`;
+                    return formattedAwayDate === String(dateStr).trim();
+                  }
+                  
+                  return String(a.away_date).trim() === String(dateStr).trim();
+                })
                 .map(a => a.brother_id);
 
-              const available = brothers.filter(b => !awayBrotherIds.includes(b.id));
+              const available = brothers.filter(b => b && !awayBrotherIds.includes(b.id));
               const assignedToday = new Set();
 
               const pickBrothers = (roleKey, count, enforceMonthlyLimit = false, enforceRestPeriod = true) => {
