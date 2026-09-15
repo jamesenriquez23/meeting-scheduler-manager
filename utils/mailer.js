@@ -4,16 +4,16 @@ const nodemailer = require('nodemailer');
 const transporter = nodemailer.createTransport({
   service: 'gmail', // Or custom SMTP (e.g., host: 'smtp.mailtrap.io', port: 2525)
   auth: {
-    user: process.env.ADMIN_EMAIL,
-    pass: process.env.ADMIN_EMAIL_PASS,
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
   },
 });
 
 // Helper function to dispatch notification emails
 async function sendNewUserNotification(newUser) {
   const mailOptions = {
-    from: `"Scheduler App" <${process.env.ADMIN_EMAIL}>`,
-    to: process.env.ADMIN_EMAIL,
+    from: `"Scheduler App" <${process.env.GMAIL_USER}>`,
+    to: process.env.GMAIL_USER,
     subject: `🔔 New User Registered: ${newUser.username}`,
     html: `
       <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
