@@ -423,141 +423,177 @@ app.post('/api/schedule/generate', authenticateToken, (req, res) => {
     }
 
     db.all(`SELECT * FROM away_dates WHERE user_id = ?`, [req.user.id], (errAway, awayRows) => {
-      let prevMonth = Number(month) - 1;
-      let prevYear = Number(year);
-      if (prevMonth === 0) {
-        prevMonth = 12;
-        prevYear = prevYear - 1;
-      }
+      db.all(`SELECT * FROM special_events WHERE user_id = ?`, [req.user.id], (errEvents, eventRows) => {
+        let prevMonth = Number(month) - 1;
+        let prevYear = Number(year);
+        if (prevMonth === 0) {
+          prevMonth = 12;
+          prevYear = prevYear - 1;
+        }
 
-      db.all(
-        `SELECT * FROM schedules WHERE user_id = ? AND month = ? AND year = ?`,
-        [req.user.id, prevMonth, prevYear],
-        (errPrev, prevRows) => {
-          let prevMonthAssignments = { wt_reader: new Set(), chairman: new Set(), attendants: new Set(), microvers: new Set(), av: new Set() };
-          
-          if (prevRows && Array.isArray(prevRows)) {
-            prevRows.forEach(row => {
-              if (row && row.wt_reader) String(row.wt_reader || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.wt_reader.add(s.trim()); });
-              if (row && row.chairman) String(row.chairman || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.chairman.add(s.trim()); });
-              if (row && row.attendants) String(row.attendants || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.attendants.add(s.trim()); });
-              if (row && row.microvers) String(row.microvers || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.microvers.add(s.trim()); });
-              if (row && row.av) String(row.av || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.av.add(s.trim()); });
-            });
-          }
-
-const padMonth = String(month).padStart(2, '0');
-          
-          // Automatically find all Sundays in the given month/year
-          const dates = [];
-          let dateObj = new Date(year, month - 1, 1);
-          
-          // Advance until we hit the first Sunday (getDay() === 0)
-          while (dateObj.getDay() !== 0) {
-            dateObj.setDate(dateObj.getDate() + 1);
-          }
-          
-          // Collect all Sundays belonging to this month
-          while (dateObj.getMonth() === month - 1) {
-            const day = String(dateObj.getDate()).padStart(2, '0');
-            const mn = String(dateObj.getMonth() + 1).padStart(2, '0');
-            const yr = dateObj.getFullYear();
-            dates.push(`${day}.${mn}.${yr}`);
+        db.all(
+          `SELECT * FROM schedules WHERE user_id = ? AND month = ? AND year = ?`,
+          [req.user.id, prevMonth, prevYear],
+          (errPrev, prevRows) => {
+            let prevMonthAssignments = { wt_reader: new Set(), chairman: new Set(), attendants: new Set(), microvers: new Set(), av: new Set() };
             
-            // Move to next week
-            dateObj.setDate(dateObj.getDate() + 7);
-          }
-          
-          db.run(`DELETE FROM schedules WHERE user_id = ? AND month = ? AND year = ?`, [req.user.id, month, year], () => {
-            const stmt = db.prepare(`INSERT INTO schedules (user_id, schedule_date, wt_reader, chairman, attendants, microvers, av, month, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            if (prevRows && Array.isArray(prevRows)) {
+              prevRows.forEach(row => {
+                if (row && row.wt_reader) String(row.wt_reader || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.wt_reader.add(s.trim()); });
+                if (row && row.chairman) String(row.chairman || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.chairman.add(s.trim()); });
+                if (row && row.attendants) String(row.attendants || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.attendants.add(s.trim()); });
+                if (row && row.microvers) String(row.microvers || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.microvers.add(s.trim()); });
+                if (row && row.av) String(row.av || '').split(',').forEach(s => { if(s.trim()) prevMonthAssignments.av.add(s.trim()); });
+              });
+            }
 
-            // Fully initialized to prevent undefined errors across all roles
-            const monthlyCounts = {
-              wt_reader: {},
-              chairman: {},
-              attendants: {},
-              microvers: {},
-              av: {}
-            };
+            // Automatically find all Sundays in the given month/year
+            const dates = [];
+            let dateObj = new Date(year, month - 1, 1);
+            
+            while (dateObj.getDay() !== 0) {
+              dateObj.setDate(dateObj.getDate() + 1);
+            }
+            
+            while (dateObj.getMonth() === month - 1) {
+              const day = String(dateObj.getDate()).padStart(2, '0');
+              const mn = String(dateObj.getMonth() + 1).padStart(2, '0');
+              const yr = dateObj.getFullYear();
+              dates.push(`${day}.${mn}.${yr}`);
+              
+              dateObj.setDate(dateObj.getDate() + 7);
+            }
+            
+            db.run(`DELETE FROM schedules WHERE user_id = ? AND month = ? AND year = ?`, [req.user.id, month, year], () => {
+              const stmt = db.prepare(`INSERT INTO schedules (user_id, schedule_date, wt_reader, chairman, attendants, microvers, av, month, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
-            dates.forEach((dateStr) => {
-              const awayBrotherIds = (awayRows || [])
-                .filter(a => {
-                  if (!a || !a.away_date) return false;
-                  
-                  // Convert database format "YYYY-MM-DD" (e.g., 2026-09-20) 
-                  // into "DD.MM.YYYY" (e.g., 20.09.2026) for an exact match
-                  const parts = String(a.away_date).trim().split('-');
-                  if (parts.length === 3) {
-                    const formattedAwayDate = `${parts[2]}.${parts[1]}.${parts[0]}`;
-                    return formattedAwayDate === String(dateStr).trim();
-                  }
-                  
-                  return String(a.away_date).trim() === String(dateStr).trim();
-                })
-                .map(a => a.brother_id);
-
-              const available = brothers.filter(b => b && !awayBrotherIds.includes(b.id));
-              const assignedToday = new Set();
-
-              const pickBrothers = (roleKey, count, enforceMonthlyLimit = false, enforceRestPeriod = true) => {
-                let eligible = available.filter(b => {
-                  if (!b || b[roleKey] !== 1) return false;
-                  if (assignedToday.has(b.id)) return false;
-
-                  if (enforceMonthlyLimit) {
-                    const currentCount = monthlyCounts[roleKey]?.[b.id] || 0;
-                    if (currentCount >= 1) return false;
-                  }
-
-                  if (enforceRestPeriod) {
-                    if (prevMonthAssignments[roleKey] && prevMonthAssignments[roleKey].has(b.name)) {
-                      return false;
-                    }
-                  }
-
-                  return true;
-                });
-
-                if (eligible.length < count) {
-                  eligible = available.filter(b => b && b[roleKey] === 1 && !assignedToday.has(b.id));
-                }
-
-                const chosenNames = [];
-                for (let i = 0; i < count; i++) {
-                  if (eligible.length === 0) break;
-                  const randomIndex = Math.floor(Math.random() * eligible.length);
-                  const chosen = eligible.splice(randomIndex, 1)[0];
-                  
-                  assignedToday.add(chosen.id);
-
-                  if (enforceMonthlyLimit && monthlyCounts[roleKey]) {
-                    monthlyCounts[roleKey][chosen.id] = (monthlyCounts[roleKey][chosen.id] || 0) + 1;
-                  }
-
-                  chosenNames.push(chosen.name);
-                }
-
-                return chosenNames.length > 0 ? chosenNames.join(', ') : 'N/A';
+              const monthlyCounts = {
+                wt_reader: {},
+                chairman: {},
+                attendants: {},
+                microvers: {},
+                av: {}
               };
 
-              const reader = pickBrothers('can_wt_reader', 1, true, true);
-              const chairman = pickBrothers('can_chairman', 1, true, true);
-              const attendants = pickBrothers('can_attendants', 2, false, true);
-              const microvers = pickBrothers('can_microvers', 2, false, true);
-              const av = pickBrothers('can_av', 2, false, true);
+              // Helper function to normalize YYYY-MM-DD into DD.MM.YYYY for format matching
+              const normalizeDate = (dbDate) => {
+                if (!dbDate) return '';
+                const cleaned = String(dbDate).trim();
+                if (cleaned.includes('-')) {
+                  const parts = cleaned.split('-');
+                  if (parts.length === 3) {
+                    return `${parts[2]}.${parts[1]}.${parts[0]}`;
+                  }
+                }
+                return cleaned;
+              };
 
-              stmt.run(req.user.id, dateStr, reader, chairman, attendants, microvers, av, month, year);
-            });
+              dates.forEach((dateStr) => {
+                const targetDateFormatted = String(dateStr).trim();
 
-            stmt.finalize(() => {
-              db.all(`SELECT * FROM schedules WHERE user_id = ? AND month = ? AND year = ?`, [req.user.id, month, year], (fetchErr, rows) => {
-                return res.json({ message: 'Schedule generated successfully', schedule: rows || [] });
+                // 1. Calculate Saturday before this Sunday to check full weekend for events
+                const [day, monthNum, yearNum] = targetDateFormatted.split('.').map(Number);
+                const sundayDate = new Date(yearNum, monthNum - 1, day);
+                const saturdayDate = new Date(sundayDate);
+                saturdayDate.setDate(saturdayDate.getDate() - 1);
+
+                const satDay = String(saturdayDate.getDate()).padStart(2, '0');
+                const satMon = String(saturdayDate.getMonth() + 1).padStart(2, '0');
+                const satYr = saturdayDate.getFullYear();
+                const saturdayFormatted = `${satDay}.${satMon}.${satYr}`;
+
+                // 2. Check if a Special Event falls on Saturday or Sunday
+                const matchingEvent = (eventRows || []).find(e => {
+                  const normalizedEventDate = normalizeDate(e.event_date);
+                  return normalizedEventDate === targetDateFormatted || normalizedEventDate === saturdayFormatted;
+                });
+
+                if (matchingEvent) {
+                  // Skip brother assignments for this week and write the event description instead
+                  stmt.run(
+                    req.user.id, 
+                    targetDateFormatted, 
+                    `EVENT: ${matchingEvent.description || 'Special Event'}`, 
+                    '-', 
+                    '-', 
+                    '-', 
+                    '-', 
+                    month, 
+                    year
+                  );
+                  return; // Skip to next week iteration
+                }
+
+                // 3. Away date filtering with normalization match
+                const awayBrotherIds = (awayRows || [])
+                  .filter(a => {
+                    if (!a || !a.away_date) return false;
+                    return normalizeDate(a.away_date) === targetDateFormatted;
+                  })
+                  .map(a => a.brother_id);
+
+                const available = brothers.filter(b => b && !awayBrotherIds.includes(b.id));
+                const assignedToday = new Set();
+
+                const pickBrothers = (roleKey, count, enforceMonthlyLimit = false, enforceRestPeriod = true) => {
+                  let eligible = available.filter(b => {
+                    if (!b || b[roleKey] !== 1) return false;
+                    if (assignedToday.has(b.id)) return false;
+
+                    if (enforceMonthlyLimit) {
+                      const currentCount = monthlyCounts[roleKey]?.[b.id] || 0;
+                      if (currentCount >= 1) return false;
+                    }
+
+                    if (enforceRestPeriod) {
+                      if (prevMonthAssignments[roleKey] && prevMonthAssignments[roleKey].has(b.name)) {
+                        return false;
+                      }
+                    }
+
+                    return true;
+                  });
+
+                  if (eligible.length < count) {
+                    eligible = available.filter(b => b && b[roleKey] === 1 && !assignedToday.has(b.id));
+                  }
+
+                  const chosenNames = [];
+                  for (let i = 0; i < count; i++) {
+                    if (eligible.length === 0) break;
+                    const randomIndex = Math.floor(Math.random() * eligible.length);
+                    const chosen = eligible.splice(randomIndex, 1)[0];
+                    
+                    assignedToday.add(chosen.id);
+
+                    if (enforceMonthlyLimit && monthlyCounts[roleKey]) {
+                      monthlyCounts[roleKey][chosen.id] = (monthlyCounts[roleKey][chosen.id] || 0) + 1;
+                    }
+
+                    chosenNames.push(chosen.name);
+                  }
+
+                  return chosenNames.length > 0 ? chosenNames.join(', ') : 'N/A';
+                };
+
+                const reader = pickBrothers('can_wt_reader', 1, true, true);
+                const chairman = pickBrothers('can_chairman', 1, true, true);
+                const attendants = pickBrothers('can_attendants', 2, false, true);
+                const microvers = pickBrothers('can_microvers', 2, false, true);
+                const av = pickBrothers('can_av', 2, false, true);
+
+                stmt.run(req.user.id, targetDateFormatted, reader, chairman, attendants, microvers, av, month, year);
+              });
+
+              stmt.finalize(() => {
+                db.all(`SELECT * FROM schedules WHERE user_id = ? AND month = ? AND year = ?`, [req.user.id, month, year], (fetchErr, rows) => {
+                  return res.json({ message: 'Schedule generated successfully', schedule: rows || [] });
+                });
               });
             });
-          });
-        }
-      );
+          }
+        );
+      });
     });
   });
 });
