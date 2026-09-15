@@ -446,13 +446,27 @@ app.post('/api/schedule/generate', authenticateToken, (req, res) => {
             });
           }
 
-          const padMonth = String(month).padStart(2, '0');
-          const dates = [
-            `07.${padMonth}.${year}`, 
-            `14.${padMonth}.${year}`, 
-            `21.${padMonth}.${year}`, 
-            `28.${padMonth}.${year}`
-          ];
+const padMonth = String(month).padStart(2, '0');
+          
+          // Automatically find all Sundays in the given month/year
+          const dates = [];
+          let dateObj = new Date(year, month - 1, 1);
+          
+          // Advance until we hit the first Sunday (getDay() === 0)
+          while (dateObj.getDay() !== 0) {
+            dateObj.setDate(dateObj.getDate() + 1);
+          }
+          
+          // Collect all Sundays belonging to this month
+          while (dateObj.getMonth() === month - 1) {
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            const mn = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const yr = dateObj.getFullYear();
+            dates.push(`${day}.${mn}.${yr}`);
+            
+            // Move to next week
+            dateObj.setDate(dateObj.getDate() + 7);
+          }
           
           db.run(`DELETE FROM schedules WHERE user_id = ? AND month = ? AND year = ?`, [req.user.id, month, year], () => {
             const stmt = db.prepare(`INSERT INTO schedules (user_id, schedule_date, wt_reader, chairman, attendants, microvers, av, month, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
