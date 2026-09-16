@@ -58,9 +58,78 @@ db.serialize(() => {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     event_date TEXT NOT NULL,
-    description TEXT NOT NULL,
+    event_type TEXT,
+    description TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
-  )`);
+  )`, () => {
+    // Migration: Add event_type and description columns if they don't exist
+    db.all("PRAGMA table_info(special_events)", [], (err, columns) => {
+      const hasEventType = columns && columns.some(col => col.name === 'event_type');
+      const hasDescription = columns && columns.some(col => col.name === 'description');
+      
+      const migrations = [];
+      
+      if (!hasEventType) {
+        migrations.push(new Promise((resolve) => {
+          console.log('Adding event_type column to special_events...');
+          db.run(`ALTER TABLE special_events ADD COLUMN event_type TEXT`, (err) => {
+            if (err) {
+              console.error('Error adding event_type column:', err.message);
+            } else {
+              console.log('Successfully added event_type column');
+            }
+            resolve();
+          });
+        }));
+      }
+      
+      if (!hasDescription) {
+        migrations.push(new Promise((resolve) => {
+          console.log('Adding description column to special_events...');
+          db.run(`ALTER TABLE special_events ADD COLUMN description TEXT`, (err) => {
+            if (err) {
+              console.error('Error adding description column:', err.message);
+            } else {
+              console.log('Successfully added description column');
+            }
+            resolve();
+          });
+        }));
+      }
+      
+      Promise.all(migrations).then(() => {
+        // Migration: Convert event dates from YYYY-MM-DD to DD.MM.YYYY format
+        db.all(`SELECT id, event_date FROM special_events WHERE event_date LIKE '____-__-__'`, [], (err, rows) => {
+          if (err) {
+            console.error('Error checking for date format migration:', err.message);
+            return;
+          }
+          
+          if (rows && rows.length > 0) {
+            console.log(`Found ${rows.length} events with incorrect date format (YYYY-MM-DD). Converting to DD.MM.YYYY...`);
+            
+            rows.forEach(row => {
+              const parts = row.event_date.split('-');
+              if (parts.length === 3) {
+                const formattedDate = `${parts[2]}.${parts[1]}.${parts[0]}`;
+                db.run(
+                  `UPDATE special_events SET event_date = ? WHERE id = ?`,
+                  [formattedDate, row.id],
+                  (updateErr) => {
+                    if (updateErr) {
+                      console.error(`Failed to convert event ${row.id}:`, updateErr.message);
+                    }
+                  }
+                );
+              }
+            });
+            
+            console.log('Event date format migration completed.');
+          }
+        });
+      });
+    });
+  });
 
   db.run(`CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,10 +380,12 @@ app.post('/api/brothers', authenticateToken, (req, res) => {
 });
 
 app.put('/api/brothers/:id', authenticateToken, (req, res) => {
-  const { can_wt_reader, can_chairman, can_attendants, can_microvers, can_av } = req.body;
+  const { name, can_wt_reader, can_chairman, can_attendants, can_microvers, can_av } = req.body;
+  
   db.run(
-    `UPDATE brothers SET can_wt_reader = ?, can_chairman = ?, can_attendants = ?, can_microvers = ?, can_av = ? WHERE id = ? AND user_id = ?`,
+    `UPDATE brothers SET name = ?, can_wt_reader = ?, can_chairman = ?, can_attendants = ?, can_microvers = ?, can_av = ? WHERE id = ? AND user_id = ?`,
     [
+      name,
       can_wt_reader ? 1 : 0,
       can_chairman ? 1 : 0,
       can_attendants ? 1 : 0,
@@ -374,19 +445,35 @@ app.delete('/api/away/:id', authenticateToken, (req, res) => {
 });
 
 app.get('/api/events', authenticateToken, (req, res) => {
+  console.log(`[GET /api/events] User ${req.user.id} fetching events`);
   db.all(`SELECT * FROM special_events WHERE user_id = ?`, [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) {
+      console.error('Error fetching events:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+    console.log(`[GET /api/events] Found ${rows ? rows.length : 0} events for user ${req.user.id}:`, rows);
     return res.json(rows);
   });
 });
 
 app.post('/api/events', authenticateToken, (req, res) => {
-  const { event_date, description } = req.body;
+  const { event_date, event_type, description } = req.body;
+  console.log(`[POST /api/events] User ${req.user.id} adding event:`, { event_date, event_type, description });
+  
+  if (!event_date || !event_type) {
+    console.error('[POST /api/events] Missing required fields');
+    return res.status(400).json({ error: 'event_date and event_type are required' });
+  }
+  
   db.run(
-    `INSERT INTO special_events (user_id, event_date, description) VALUES (?, ?, ?)`,
-    [req.user.id, event_date, description],
+    `INSERT INTO special_events (user_id, event_date, event_type, description) VALUES (?, ?, ?, ?)`,
+    [req.user.id, event_date, event_type, description || ''],
     function (err) {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) {
+        console.error('[POST /api/events] Database error:', err.message);
+        return res.status(500).json({ error: err.message });
+      }
+      console.log(`[POST /api/events] Successfully created event with ID ${this.lastID}`);
       return res.json({ id: this.lastID });
     }
   );
@@ -508,20 +595,44 @@ app.post('/api/schedule/generate', authenticateToken, (req, res) => {
                   return normalizedEventDate === targetDateFormatted || normalizedEventDate === saturdayFormatted;
                 });
 
+                // Check for Circuit Overseer Visit (before checking other events)
+                const circuitOverseerVisit = matchingEvent && matchingEvent.event_type === 'circuit_overseer_visit';
+
                 if (matchingEvent) {
-                  // Skip brother assignments for this week and write the event description instead
-                  stmt.run(
-                    req.user.id, 
-                    targetDateFormatted, 
-                    `EVENT: ${matchingEvent.description || 'Special Event'}`, 
-                    '-', 
-                    '-', 
-                    '-', 
-                    '-', 
-                    month, 
-                    year
-                  );
-                  return; // Skip to next week iteration
+                  // Handle Memorial Week special case - skip all assignments on Sat/Sun
+                  if (matchingEvent.event_type === 'memorial_week') {
+                    stmt.run(
+                      req.user.id, 
+                      targetDateFormatted, 
+                      'MEMORIAL WEEK - No Assignments', 
+                      '-', 
+                      '-', 
+                      '-', 
+                      '-', 
+                      month, 
+                      year
+                    );
+                    return;
+                  }
+
+                  // For Circuit Overseer Visit: continue with normal assignment but skip WT Reader
+                  if (circuitOverseerVisit) {
+                    // Continue to normal assignment logic below
+                  } else {
+                    // For other events on weekend, skip all assignments
+                    stmt.run(
+                      req.user.id, 
+                      targetDateFormatted, 
+                      `EVENT: ${matchingEvent.event_type ? matchingEvent.event_type.replace(/_/g, ' ').toUpperCase() : 'SPECIAL EVENT'}`, 
+                      '-', 
+                      '-', 
+                      '-', 
+                      '-', 
+                      month, 
+                      year
+                    );
+                    return;
+                  }
                 }
 
                 // 3. Away date filtering with normalization match
@@ -535,7 +646,18 @@ app.post('/api/schedule/generate', authenticateToken, (req, res) => {
                 const available = brothers.filter(b => b && !awayBrotherIds.includes(b.id));
                 const assignedToday = new Set();
 
+                // Check for weekday special events (e.g., Memorial Week on a weekday)
+                const weekdayEvent = (eventRows || []).find(e => {
+                  const normalizedEventDate = normalizeDate(e.event_date);
+                  return normalizedEventDate === targetDateFormatted && e.event_type === 'memorial_week';
+                });
+
                 const pickBrothers = (roleKey, count, enforceMonthlyLimit = false, enforceRestPeriod = true) => {
+                  // Skip WT Reader assignment during Circuit Overseer Visit
+                  if (circuitOverseerVisit && roleKey === 'can_wt_reader') {
+                    return 'N/A';
+                  }
+
                   let eligible = available.filter(b => {
                     if (!b || b[roleKey] !== 1) return false;
                     if (assignedToday.has(b.id)) return false;
@@ -576,13 +698,16 @@ app.post('/api/schedule/generate', authenticateToken, (req, res) => {
                   return chosenNames.length > 0 ? chosenNames.join(', ') : 'N/A';
                 };
 
+                // For Memorial Week on weekday: show it but continue normal schedule
+                const eventLabel = weekdayEvent ? ' (MEMORIAL WEEK)' : '';
+
                 const reader = pickBrothers('can_wt_reader', 1, true, true);
                 const chairman = pickBrothers('can_chairman', 1, true, true);
                 const attendants = pickBrothers('can_attendants', 2, false, true);
                 const microvers = pickBrothers('can_microvers', 2, false, true);
                 const av = pickBrothers('can_av', 2, false, true);
 
-                stmt.run(req.user.id, targetDateFormatted, reader, chairman, attendants, microvers, av, month, year);
+                stmt.run(req.user.id, targetDateFormatted + eventLabel, reader, chairman, attendants, microvers, av, month, year);
               });
 
               stmt.finalize(() => {
